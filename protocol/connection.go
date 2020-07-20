@@ -95,6 +95,7 @@ func (c Connection) handleOut() {
 		case <-c.c:
 			return
 		}
+		//Todo append to first sec
 		c.o <- []byte{PkgStart}
 		for cc != nil {
 			select {
