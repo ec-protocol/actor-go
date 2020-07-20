@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
@@ -18,12 +20,24 @@ func main() {
 	i := make(chan []byte)
 	o := make(chan []byte)
 	handleStdIO(c, i, o)
+	simulateTraffic(o)
+	waitOnTermination()
+}
+
+func simulateTraffic(o chan []byte) {
 	go func() {
-		for i := 0; i < 10000000000; i++ {
-			o <- make([]byte, rand.Intn(1000000)+1)
+		buf, _ := ioutil.ReadFile("data/in.mp4")
+		for len(buf) > 0 {
+			l := rand.Intn(100000) + 1
+			if l > len(buf) {
+				l = len(buf)
+			}
+			pkg := make([]byte, l)
+			copy(pkg, buf[:l])
+			o <- pkg
+			buf = buf[l:]
 		}
 	}()
-	waitOnTermination()
 }
 
 func waitOnTermination() {
@@ -63,13 +77,23 @@ func readFromKeyboard(c chan []byte) {
 }
 
 func writeToStdOut(c chan []byte) {
-	j := 0
+	in, _ := ioutil.ReadFile("data/in.mp4")
+	buf := make([]byte, 0)
+	data := <-c
+	buf = append(buf, data...)
 	for {
-		for i := 0; i < 1073741824; i++ {
-			i += len(<-c)
+		select {
+		case data := <-c:
+			buf = append(buf, data...)
+		case <-time.After(2000 * time.Millisecond):
+			ioutil.WriteFile("data/out.mp4", buf, 0644)
+			if bytes.Compare(buf, in) == 0 {
+				println("Done!!!")
+			} else {
+				println(":(")
+			}
+			return
 		}
-		j++
-		println(j)
 	}
 }
 
@@ -82,19 +106,21 @@ func handleIn(c net.Conn, i chan []byte) {
 		if n <= 0 {
 			continue
 		}
-		i <- buf[:n]
+		s := make([]byte, n)
+		copy(s, buf[:n])
+		i <- s
 	}
 }
 
 func handleOut(c net.Conn, o chan []byte) {
 	defer c.Close()
 
-	const pkgSize = 64*1024 - 512
+	const pkgSize = 64*1024 - 60 - 1
 	buf := make([]byte, 0, pkgSize)
 	for {
 	bufContext:
-		for i := 0; i < pkgSize; i++ {
-			if i != 0 || len(buf) > 0 {
+		for i := 0; i < pkgSize; i = len(buf) {
+			if i > 0 {
 				select {
 				case b := <-o:
 					buf = append(buf, b...)
