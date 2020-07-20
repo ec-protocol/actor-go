@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
+	"github.com/ec-protocol/actor-go/protocol"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -19,25 +19,87 @@ func main() {
 	}
 	i := make(chan []byte)
 	o := make(chan []byte)
-	handleStdIO(c, i, o)
-	simulateTraffic(o)
+	connection := protocol.NewConnection(i, o)
+	connection.Init()
+	handleConnection(c, i, o)
+	fsc := make(chan []byte)
+	connection.O <- fsc
+	readFile(fsc)
 	waitOnTermination()
 }
 
-func simulateTraffic(o chan []byte) {
-	go func() {
-		buf, _ := ioutil.ReadFile("data/in.mp4")
-		for len(buf) > 0 {
-			l := rand.Intn(100000) + 1
-			if l > len(buf) {
-				l = len(buf)
-			}
-			pkg := make([]byte, l)
-			copy(pkg, buf[:l])
-			o <- pkg
-			buf = buf[l:]
+func readFile(o chan []byte) {
+	buf, _ := ioutil.ReadFile("data/in.mp4")
+	buf = escape(buf)
+	for len(buf) > 0 {
+		l := rand.Intn(100000) + 1
+		if l > len(buf) {
+			l = len(buf)
 		}
-	}()
+		pkg := make([]byte, l)
+		copy(pkg, buf[:l])
+		o <- pkg
+		buf = buf[l:]
+	}
+	o <- nil
+}
+
+func escape(pkg []byte) []byte {
+	var escapeByte byte = 7
+	r := make([]byte, 0, len(pkg))
+	for _, e := range pkg {
+		switch e {
+		case protocol.PkgStart:
+			r = append(r, escapeByte)
+			r = append(r, 8)
+		case protocol.PkgEnd:
+			r = append(r, escapeByte)
+			r = append(r, 9)
+		case protocol.ControlPkgStart:
+			r = append(r, escapeByte)
+			r = append(r, 10)
+		case protocol.ControlPkgEnd:
+			r = append(r, escapeByte)
+			r = append(r, 11)
+		case protocol.Ignore:
+			r = append(r, escapeByte)
+			r = append(r, 12)
+		case escapeByte:
+			r = append(r, escapeByte)
+			r = append(r, escapeByte)
+		default:
+			r = append(r, e)
+		}
+	}
+	return r
+}
+
+func unescape(e []byte) []byte {
+	var escapeByte byte = 7
+	r := make([]byte, 0, len(e))
+	for i := 0; i < len(e); i++ {
+		switch e[i] {
+		case escapeByte:
+			i++
+			switch e[i] {
+			case 8:
+				r = append(r, protocol.PkgStart)
+			case 9:
+				r = append(r, protocol.PkgEnd)
+			case 10:
+				r = append(r, protocol.ControlPkgStart)
+			case 11:
+				r = append(r, protocol.ControlPkgEnd)
+			case 12:
+				r = append(r, protocol.Ignore)
+			case escapeByte:
+				r = append(r, escapeByte)
+			}
+		default:
+			r = append(r, e[i])
+		}
+	}
+	return r
 }
 
 func waitOnTermination() {
@@ -56,36 +118,28 @@ func startServer() {
 		}
 		i := make(chan []byte)
 		o := make(chan []byte)
-		go handleStdIO(c, i, o)
+		connection := protocol.NewConnection(i, o)
+		connection.Init()
+		handleConnection(c, i, o)
+
+		writeFile(<-connection.I)
 	}
 }
 
-func handleStdIO(c net.Conn, i chan []byte, o chan []byte) {
-	go readFromKeyboard(o)
-	go writeToStdOut(i)
+func handleConnection(c net.Conn, i chan []byte, o chan []byte) {
 	go handleIn(c, i)
 	go handleOut(c, o)
 }
 
-func readFromKeyboard(c chan []byte) {
-	r := bufio.NewReader(os.Stdin)
-	for {
-		t, _ := r.ReadString('\n')
-		b := []byte(t)
-		c <- b
-	}
-}
-
-func writeToStdOut(c chan []byte) {
+func writeFile(c chan []byte) {
 	in, _ := ioutil.ReadFile("data/in.mp4")
 	buf := make([]byte, 0)
 	data := <-c
 	buf = append(buf, data...)
 	for {
-		select {
-		case data := <-c:
-			buf = append(buf, data...)
-		case <-time.After(2000 * time.Millisecond):
+		data := <-c
+		if data == nil {
+			buf = unescape(buf)
 			ioutil.WriteFile("data/out.mp4", buf, 0644)
 			if bytes.Compare(buf, in) == 0 {
 				println("Done!!!")
@@ -94,6 +148,7 @@ func writeToStdOut(c chan []byte) {
 			}
 			return
 		}
+		buf = append(buf, data...)
 	}
 }
 
