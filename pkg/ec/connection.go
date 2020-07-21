@@ -1,6 +1,8 @@
-package protocol
+package ec
 
-import "errors"
+import (
+	"errors"
+)
 
 const (
 	PkgStart = iota + 1
@@ -28,12 +30,12 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 	}
 }
 
-func (c Connection) Init() {
+func (c *Connection) Init() {
 	go c.handleIn()
 	go c.handleOut()
 }
 
-func (c Connection) handleIn() {
+func (c *Connection) handleIn() {
 	pos := 0
 	var cc chan []byte = nil
 	for {
@@ -87,7 +89,7 @@ func (c Connection) handleIn() {
 	}
 }
 
-func (c Connection) handleOut() {
+func (c *Connection) handleOut() {
 	for {
 		var cc chan []byte = nil
 		select {
@@ -95,21 +97,26 @@ func (c Connection) handleOut() {
 		case <-c.c:
 			return
 		}
-		//Todo append to first sec
-		c.o <- []byte{PkgStart}
+		b := true
 		for cc != nil {
 			select {
 			case sec := <-cc:
 				if sec == nil {
+					c.o <- []byte{PkgEnd}
 					cc = nil
+					break
 				}
 				checkControlCharacters(sec)
+				if b {
+					c.o <- append([]byte{PkgStart}, sec...)
+					b = false
+					break
+				}
 				c.o <- sec
 			case <-c.c:
 				return
 			}
 		}
-		c.o <- []byte{PkgEnd}
 	}
 }
 

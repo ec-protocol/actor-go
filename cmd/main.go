@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"github.com/ec-protocol/actor-go/protocol"
+	"github.com/ec-protocol/actor-go/pkg/ec"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -19,7 +19,7 @@ func main() {
 	}
 	i := make(chan []byte)
 	o := make(chan []byte)
-	connection := protocol.NewConnection(i, o)
+	connection := ec.NewConnection(i, o)
 	connection.Init()
 	handleConnection(c, i, o)
 	fsc := make(chan []byte)
@@ -49,19 +49,19 @@ func escape(pkg []byte) []byte {
 	r := make([]byte, 0, len(pkg))
 	for _, e := range pkg {
 		switch e {
-		case protocol.PkgStart:
+		case ec.PkgStart:
 			r = append(r, escapeByte)
 			r = append(r, 8)
-		case protocol.PkgEnd:
+		case ec.PkgEnd:
 			r = append(r, escapeByte)
 			r = append(r, 9)
-		case protocol.ControlPkgStart:
+		case ec.ControlPkgStart:
 			r = append(r, escapeByte)
 			r = append(r, 10)
-		case protocol.ControlPkgEnd:
+		case ec.ControlPkgEnd:
 			r = append(r, escapeByte)
 			r = append(r, 11)
-		case protocol.Ignore:
+		case ec.Ignore:
 			r = append(r, escapeByte)
 			r = append(r, 12)
 		case escapeByte:
@@ -83,15 +83,15 @@ func unescape(e []byte) []byte {
 			i++
 			switch e[i] {
 			case 8:
-				r = append(r, protocol.PkgStart)
+				r = append(r, ec.PkgStart)
 			case 9:
-				r = append(r, protocol.PkgEnd)
+				r = append(r, ec.PkgEnd)
 			case 10:
-				r = append(r, protocol.ControlPkgStart)
+				r = append(r, ec.ControlPkgStart)
 			case 11:
-				r = append(r, protocol.ControlPkgEnd)
+				r = append(r, ec.ControlPkgEnd)
 			case 12:
-				r = append(r, protocol.Ignore)
+				r = append(r, ec.Ignore)
 			case escapeByte:
 				r = append(r, escapeByte)
 			}
@@ -116,9 +116,10 @@ func startServer() {
 		if err != nil {
 			continue
 		}
+
 		i := make(chan []byte)
 		o := make(chan []byte)
-		connection := protocol.NewConnection(i, o)
+		connection := ec.NewConnection(i, o)
 		connection.Init()
 		handleConnection(c, i, o)
 
@@ -142,6 +143,7 @@ func writeFile(c chan []byte) {
 			buf = unescape(buf)
 			ioutil.WriteFile("data/out.mp4", buf, 0644)
 			if bytes.Compare(buf, in) == 0 {
+
 				println("Done!!!")
 			} else {
 				println(":(")
