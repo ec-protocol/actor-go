@@ -1,11 +1,15 @@
 package ec
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 )
 
 const (
-	PkgStart = iota + 1
+	PkgStart byte = iota + 1
 	PkgEnd
 	ControlPkgStart
 	ControlPkgEnd
@@ -13,36 +17,90 @@ const (
 )
 
 type Connection struct {
-	i chan []byte
-	o chan []byte
-	c chan bool
-	I chan chan []byte
-	O chan chan []byte
+	i        chan []byte
+	o        chan []byte
+	cancel   chan bool
+	reset    chan bool
+	ikey     []byte
+	okey     []byte
+	controlI chan chan []byte
+	I        chan chan []byte
+	O        chan chan []byte
 }
 
 func NewConnection(i chan []byte, o chan []byte) Connection {
 	return Connection{
-		i: i,
-		o: o,
-		c: make(chan bool),
-		I: make(chan chan []byte),
-		O: make(chan chan []byte),
+		i:        i,
+		o:        o,
+		cancel:   make(chan bool),
+		controlI: make(chan chan []byte),
+		I:        make(chan chan []byte),
+		O:        make(chan chan []byte),
 	}
 }
 
 func (c *Connection) Init() {
+	pk, _ := genRSAKey(2048)
+	spk := x509.MarshalPKCS1PublicKey(&pk.PublicKey)
+	pkp := make([]byte, len(spk)+2)
+	pkp = append(pkp, ControlPkgStart)
+	pkp = append(pkp, spk...)
+	pkp = append(pkp, ControlPkgEnd)
+	c.o <- pkp
+
+	go func() {
+		cpc := <-c.controlI
+		opkp := make([]byte, 0)
+		for {
+			data := <-cpc
+			if data == nil {
+				break
+			}
+			opkp = append(opkp, data...)
+		}
+		opk, _ := x509.ParsePKCS1PublicKey(opkp)
+		c.ikey = genSyncKey(32)
+		epk, _ := rsa.EncryptOAEP(sha256.New(), rand.Reader, opk, c.ikey, nil)
+		epk = escape(epk)
+		epkp := make([]byte, len(epk)+2)
+		epkp = append(epkp, ControlPkgStart)
+		epkp = append(epkp, epk...)
+		epkp = append(epkp, ControlPkgEnd)
+		c.o <- epkp
+
+		cpc = <-c.controlI
+		opkp = make([]byte, 0)
+		for {
+			data := <-cpc
+			if data == nil {
+				break
+			}
+			opkp = append(opkp, data...)
+		}
+
+		c.okey, _ = rsa.DecryptOAEP(sha256.New(), rand.Reader, pk, unescape(opkp), nil)
+		c.reset <- true
+	}()
+
 	go c.handleIn()
 	go c.handleOut()
 }
 
 func (c *Connection) handleIn() {
+	//todo check if booth okey and ikey are set if use encrypted communication
 	pos := 0
 	var cc chan []byte = nil
+	var ccpc chan []byte = nil
 	for {
 		select {
+		case <-c.reset:
+			go c.handleIn()
+			return
+		case <-c.cancel:
+			return
 		case e := <-c.i:
 			sec := make([]byte, 0, len(e))
-			controlPkg := make([]byte, 0)
+			csec := make([]byte, 0)
 			for _, i := range e {
 				switch i {
 				case PkgStart:
@@ -66,40 +124,54 @@ func (c *Connection) handleIn() {
 						panic(errors.New("illegal state"))
 					}
 					pos = 2
+					ccpc = make(chan []byte)
+					c.controlI <- ccpc
 				case ControlPkgEnd:
 					if pos != 2 {
 						panic(errors.New("illegal state"))
 					}
 					pos = 0
+					receiveSec(csec, ccpc)
+					csec = csec[:0]
+					ccpc <- nil
+					ccpc = nil
 				case Ignore:
 				default:
 					switch pos {
 					case 1:
 						sec = append(sec, i)
 					case 2:
-						controlPkg = append(controlPkg, i)
+						csec = append(csec, i)
 					default:
 					}
 				}
 			}
 			receiveSec(sec, cc)
-		case <-c.c:
-			return
+			receiveSec(csec, ccpc)
 		}
 	}
 }
 
 func (c *Connection) handleOut() {
+	//todo check if booth okey and ikey are set if use encrypted communication
 	for {
 		var cc chan []byte = nil
 		select {
-		case cc = <-c.O:
-		case <-c.c:
+		case <-c.reset:
+			go c.handleOut()
 			return
+		case <-c.cancel:
+			return
+		case cc = <-c.O:
 		}
 		b := true
 		for cc != nil {
 			select {
+			case <-c.reset: //todo consider removing reset option at this state to implement ctf challenge
+				go c.handleOut()
+				return
+			case <-c.cancel:
+				return
 			case sec := <-cc:
 				if sec == nil {
 					c.o <- []byte{PkgEnd}
@@ -113,8 +185,6 @@ func (c *Connection) handleOut() {
 					break
 				}
 				c.o <- sec
-			case <-c.c:
-				return
 			}
 		}
 	}
