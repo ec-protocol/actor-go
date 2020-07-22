@@ -20,8 +20,8 @@ func main() {
 	i := make(chan []byte)
 	o := make(chan []byte)
 	connection := ec.NewConnection(i, o)
-	connection.Init()
 	handleConnection(c, i, o)
+	connection.Init()
 	fsc := make(chan []byte)
 	connection.O <- fsc
 	readFile(fsc)
@@ -120,9 +120,8 @@ func startServer() {
 		i := make(chan []byte)
 		o := make(chan []byte)
 		connection := ec.NewConnection(i, o)
-		connection.Init()
 		handleConnection(c, i, o)
-
+		connection.Init()
 		writeFile(<-connection.I)
 	}
 }

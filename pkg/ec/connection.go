@@ -42,7 +42,8 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 func (c *Connection) Init() {
 	pk, _ := genRSAKey(2048)
 	spk := x509.MarshalPKCS1PublicKey(&pk.PublicKey)
-	pkp := make([]byte, len(spk)+2)
+	spk = escape(spk)
+	pkp := make([]byte, 0, len(spk)+2)
 	pkp = append(pkp, ControlPkgStart)
 	pkp = append(pkp, spk...)
 	pkp = append(pkp, ControlPkgEnd)
@@ -58,11 +59,12 @@ func (c *Connection) Init() {
 			}
 			opkp = append(opkp, data...)
 		}
+		opkp = unescape(opkp)
 		opk, _ := x509.ParsePKCS1PublicKey(opkp)
 		c.ikey = genSyncKey(32)
 		epk, _ := rsa.EncryptOAEP(sha256.New(), rand.Reader, opk, c.ikey, nil)
 		epk = escape(epk)
-		epkp := make([]byte, len(epk)+2)
+		epkp := make([]byte, 0, len(epk)+2)
 		epkp = append(epkp, ControlPkgStart)
 		epkp = append(epkp, epk...)
 		epkp = append(epkp, ControlPkgEnd)
@@ -87,7 +89,10 @@ func (c *Connection) Init() {
 }
 
 func (c *Connection) handleIn() {
-	//todo check if booth okey and ikey are set if use encrypted communication
+	crypt := false
+	if c.ikey != nil && c.okey != nil {
+		crypt = true
+	}
 	pos := 0
 	var cc chan []byte = nil
 	var ccpc chan []byte = nil
@@ -99,6 +104,9 @@ func (c *Connection) handleIn() {
 		case <-c.cancel:
 			return
 		case e := <-c.i:
+			if crypt {
+				e, _ = decryptSync(e, c.ikey)
+			}
 			sec := make([]byte, 0, len(e))
 			csec := make([]byte, 0)
 			for _, i := range e {
@@ -153,7 +161,10 @@ func (c *Connection) handleIn() {
 }
 
 func (c *Connection) handleOut() {
-	//todo check if booth okey and ikey are set if use encrypted communication
+	crypt := false
+	if c.ikey != nil && c.okey != nil {
+		crypt = true
+	}
 	for {
 		var cc chan []byte = nil
 		select {
@@ -183,6 +194,12 @@ func (c *Connection) handleOut() {
 					c.o <- append([]byte{PkgStart}, sec...)
 					b = false
 					break
+				}
+				if crypt {
+					if len(sec) < 12 {
+
+					}
+					sec, _ = encryptSync(sec, c.okey)
 				}
 				c.o <- sec
 			}
