@@ -22,10 +22,92 @@ func main() {
 	connection := ec.NewConnection(i, o)
 	handleConnection(c, i, o)
 	connection.Init()
-	fsc := make(chan []byte)
-	connection.O <- fsc
-	readFile(fsc)
+	for i := 0; i < 10; i++ {
+		fsc := make(chan []byte)
+		connection.O <- fsc
+		readFile(fsc)
+	}
+
 	waitOnTermination()
+}
+
+func waitOnTermination() {
+	cc := make(chan os.Signal)
+	signal.Notify(cc, os.Interrupt, syscall.SIGTERM)
+	<-cc
+}
+
+func startServer() {
+	tcpAddr, _ := net.ResolveTCPAddr("tcp", ":6563")
+	listener, _ := net.ListenTCP("tcp", tcpAddr)
+	for {
+		c, err := listener.Accept()
+		if err != nil {
+			continue
+		}
+
+		i := make(chan []byte)
+		o := make(chan []byte)
+		connection := ec.NewConnection(i, o)
+		handleConnection(c, i, o)
+		connection.Init()
+
+		for i := 0; i < 10; i++ {
+			writeFile(<-connection.I)
+		}
+	}
+}
+
+func handleConnection(c net.Conn, i chan []byte, o chan []byte) {
+	go handleIn(c, i)
+	go handleOut(c, o)
+}
+
+func handleIn(c net.Conn, i chan []byte) {
+	defer c.Close()
+
+	buf := make([]byte, 64*1024)
+	for {
+		n, _ := c.Read(buf)
+		if n <= 0 {
+			continue
+		}
+		s := make([]byte, n)
+		copy(s, buf[:n])
+		i <- s
+	}
+}
+
+func handleOut(c net.Conn, o chan []byte) {
+	defer c.Close()
+
+	const pkgSize = 64*1024 - 60 - 1
+	buf := make([]byte, 0, pkgSize)
+	for {
+	bufContext:
+		for i := 0; i < pkgSize; i = len(buf) {
+			if i > 0 {
+				select {
+				case b := <-o:
+					buf = append(buf, b...)
+				case <-time.After(100 * time.Microsecond):
+					break bufContext
+				}
+			} else {
+				b := <-o
+				buf = append(buf, b...)
+			}
+		}
+		if len(buf) <= pkgSize {
+			c.Write(buf)
+			buf = buf[:0]
+		} else {
+			for len(buf) > pkgSize {
+				c.Write(buf[0:pkgSize])
+				buf = buf[pkgSize:]
+			}
+		}
+	}
 }
 
 func readFile(o chan []byte) {
@@ -42,6 +124,28 @@ func readFile(o chan []byte) {
 		buf = buf[l:]
 	}
 	o <- nil
+}
+
+func writeFile(c chan []byte) {
+	in, _ := ioutil.ReadFile("data/in.mp4")
+	buf := make([]byte, 0)
+	data := <-c
+	buf = append(buf, data...)
+	for {
+		data := <-c
+		if data == nil {
+			buf = unescape(buf)
+			ioutil.WriteFile("data/out.mp4", buf, 0644)
+			if bytes.Compare(buf, in) == 0 {
+
+				println("Done!!!")
+			} else {
+				println(":(")
+			}
+			return
+		}
+		buf = append(buf, data...)
+	}
 }
 
 func escape(pkg []byte) []byte {
@@ -100,102 +204,4 @@ func unescape(e []byte) []byte {
 		}
 	}
 	return r
-}
-
-func waitOnTermination() {
-	cc := make(chan os.Signal)
-	signal.Notify(cc, os.Interrupt, syscall.SIGTERM)
-	<-cc
-}
-
-func startServer() {
-	tcpAddr, _ := net.ResolveTCPAddr("tcp", ":6563")
-	listener, _ := net.ListenTCP("tcp", tcpAddr)
-	for {
-		c, err := listener.Accept()
-		if err != nil {
-			continue
-		}
-
-		i := make(chan []byte)
-		o := make(chan []byte)
-		connection := ec.NewConnection(i, o)
-		handleConnection(c, i, o)
-		connection.Init()
-		writeFile(<-connection.I)
-	}
-}
-
-func handleConnection(c net.Conn, i chan []byte, o chan []byte) {
-	go handleIn(c, i)
-	go handleOut(c, o)
-}
-
-func writeFile(c chan []byte) {
-	in, _ := ioutil.ReadFile("data/in.mp4")
-	buf := make([]byte, 0)
-	data := <-c
-	buf = append(buf, data...)
-	for {
-		data := <-c
-		if data == nil {
-			buf = unescape(buf)
-			ioutil.WriteFile("data/out.mp4", buf, 0644)
-			if bytes.Compare(buf, in) == 0 {
-
-				println("Done!!!")
-			} else {
-				println(":(")
-			}
-			return
-		}
-		buf = append(buf, data...)
-	}
-}
-
-func handleIn(c net.Conn, i chan []byte) {
-	defer c.Close()
-
-	buf := make([]byte, 64*1024)
-	for {
-		n, _ := c.Read(buf)
-		if n <= 0 {
-			continue
-		}
-		s := make([]byte, n)
-		copy(s, buf[:n])
-		i <- s
-	}
-}
-
-func handleOut(c net.Conn, o chan []byte) {
-	defer c.Close()
-
-	const pkgSize = 64*1024 - 60 - 1
-	buf := make([]byte, 0, pkgSize)
-	for {
-	bufContext:
-		for i := 0; i < pkgSize; i = len(buf) {
-			if i > 0 {
-				select {
-				case b := <-o:
-					buf = append(buf, b...)
-				case <-time.After(100 * time.Microsecond):
-					break bufContext
-				}
-			} else {
-				b := <-o
-				buf = append(buf, b...)
-			}
-		}
-		if len(buf) <= pkgSize {
-			c.Write(buf)
-			buf = buf[:0]
-		} else {
-			for len(buf) > pkgSize {
-				c.Write(buf[0:pkgSize])
-				buf = buf[pkgSize:]
-			}
-		}
-	}
 }
