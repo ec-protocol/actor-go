@@ -117,9 +117,9 @@ func writeFile(c chan []byte) {
 			buf = unescape(buf)
 			ioutil.WriteFile(outFile, buf, 0644)
 			if bytes.Compare(buf, in) == 0 {
-				fmt.Print("complete")
+				fmt.Println("complete")
 			} else {
-				fmt.Print("failed")
+				fmt.Println("failed")
 			}
 			return
 		}
