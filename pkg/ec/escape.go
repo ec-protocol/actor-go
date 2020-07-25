@@ -1,7 +1,8 @@
 package ec
 
+const escapeByte byte = 7
+
 func escape(pkg []byte) []byte {
-	var escapeByte byte = 7
 	r := make([]byte, 0, len(pkg))
 	for _, e := range pkg {
 		switch e {
@@ -31,7 +32,6 @@ func escape(pkg []byte) []byte {
 }
 
 func unescape(e []byte) []byte {
-	var escapeByte byte = 7
 	r := make([]byte, 0, len(e))
 	for i := 0; i < len(e); i++ {
 		switch e[i] {

@@ -40,47 +40,49 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 }
 
 func (c *Connection) Init() {
-	pk, _ := genRSAKey(2048)
-	spk := x509.MarshalPKCS1PublicKey(&pk.PublicKey)
-	spk = escape(spk)
-	pkp := make([]byte, 0, len(spk)+2)
-	pkp = append(pkp, ControlPkgStart)
-	pkp = append(pkp, spk...)
-	pkp = append(pkp, ControlPkgEnd)
-	c.o <- pkp
+	privateKey, _ := genRSAKey(2048)
+	encodedPublicKey := x509.MarshalPKCS1PublicKey(&privateKey.PublicKey)
+	encodedPublicKey = escape(encodedPublicKey)
+	pkg := make([]byte, 0, len(encodedPublicKey)+2)
+	pkg = append(pkg, ControlPkgStart)
+	pkg = append(pkg, encodedPublicKey...)
+	pkg = append(pkg, ControlPkgEnd)
+	c.o <- pkg
 
 	go func() {
 		cpc := <-c.controlI
-		opkp := make([]byte, 0)
+		pkg := make([]byte, 0)
 		for {
 			data := <-cpc
 			if data == nil {
 				break
 			}
-			opkp = append(opkp, data...)
+			pkg = append(pkg, data...)
 		}
-		opkp = unescape(opkp)
-		opk, _ := x509.ParsePKCS1PublicKey(opkp)
+		thereEncodedPublicKey := unescape(pkg)
+		therePublicKey, _ := x509.ParsePKCS1PublicKey(thereEncodedPublicKey)
 		c.ikey = genSyncKey(32)
-		epk, _ := rsa.EncryptOAEP(sha256.New(), rand.Reader, opk, c.ikey, nil)
-		epk = escape(epk)
-		epkp := make([]byte, 0, len(epk)+2)
-		epkp = append(epkp, ControlPkgStart)
-		epkp = append(epkp, epk...)
-		epkp = append(epkp, ControlPkgEnd)
-		c.o <- epkp
+		encryptedInKey, _ := rsa.EncryptOAEP(sha256.New(), rand.Reader, therePublicKey, c.ikey, nil)
+		encryptedInKey = escape(encryptedInKey)
+		pkg = make([]byte, 0, len(encryptedInKey)+2)
+		pkg = append(pkg, ControlPkgStart)
+		pkg = append(pkg, encryptedInKey...)
+		pkg = append(pkg, ControlPkgEnd)
+		c.o <- pkg
 
 		cpc = <-c.controlI
-		opkp = make([]byte, 0)
+		pkg = make([]byte, 0)
 		for {
 			data := <-cpc
 			if data == nil {
 				break
 			}
-			opkp = append(opkp, data...)
+			pkg = append(pkg, data...)
 		}
 
-		c.okey, _ = rsa.DecryptOAEP(sha256.New(), rand.Reader, pk, unescape(opkp), nil)
+		encryptedOutKey := unescape(pkg)
+		c.okey, _ = rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedOutKey, nil)
+
 		c.reset <- true
 	}()
 
@@ -178,9 +180,6 @@ func (c *Connection) handleOut() {
 		b := true
 		for cc != nil {
 			select {
-			case <-c.reset: //todo consider removing reset option at this state to implement ctf challenge
-				go c.handleOut()
-				return
 			case <-c.cancel:
 				return
 			case sec := <-cc:
@@ -196,9 +195,6 @@ func (c *Connection) handleOut() {
 					break
 				}
 				if crypt {
-					if len(sec) < 12 {
-
-					}
 					sec, _ = encryptSync(sec, c.okey)
 				}
 				c.o <- sec

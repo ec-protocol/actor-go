@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/ec-protocol/actor-go/pkg/ec"
 	"io/ioutil"
 	"math/rand"
@@ -12,55 +13,44 @@ import (
 	"time"
 )
 
+const (
+	connectTo = "localhost:6563"
+	listenOn  = ":6563"
+	inFile    = "data/in.mp4"
+	outFile   = "data/out.mp4"
+)
+
 func main() {
-	c, err := net.Dial("tcp", "localhost:6563")
+	isClient := true
+	tcpConn, err := net.Dial("tcp", connectTo)
 	if err != nil {
-		startServer()
-	}
-	i := make(chan []byte)
-	o := make(chan []byte)
-	connection := ec.NewConnection(i, o)
-	handleConnection(c, i, o)
-	connection.Init()
-	for i := 0; i < 10; i++ {
-		fsc := make(chan []byte)
-		connection.O <- fsc
-		readFile(fsc)
+		isClient = false
+		tcpAddr, _ := net.ResolveTCPAddr("tcp", listenOn)
+		tcpListener, _ := net.ListenTCP("tcp", tcpAddr)
+		tcpConn, _ = tcpListener.Accept()
 	}
 
-	waitOnTermination()
-}
+	conn := createConnection(tcpConn)
 
-func waitOnTermination() {
+	if isClient {
+		receiveData(conn)
+	} else {
+		sendData(conn)
+	}
+
 	cc := make(chan os.Signal)
 	signal.Notify(cc, os.Interrupt, syscall.SIGTERM)
 	<-cc
 }
 
-func startServer() {
-	tcpAddr, _ := net.ResolveTCPAddr("tcp", ":6563")
-	listener, _ := net.ListenTCP("tcp", tcpAddr)
-	for {
-		c, err := listener.Accept()
-		if err != nil {
-			continue
-		}
-
-		i := make(chan []byte)
-		o := make(chan []byte)
-		connection := ec.NewConnection(i, o)
-		handleConnection(c, i, o)
-		connection.Init()
-
-		for i := 0; i < 10; i++ {
-			writeFile(<-connection.I)
-		}
-	}
-}
-
-func handleConnection(c net.Conn, i chan []byte, o chan []byte) {
+func createConnection(c net.Conn) ec.Connection {
+	i := make(chan []byte)
+	o := make(chan []byte)
+	connection := ec.NewConnection(i, o)
 	go handleIn(c, i)
 	go handleOut(c, o)
+	connection.Init()
+	return connection
 }
 
 func handleIn(c net.Conn, i chan []byte) {
@@ -110,8 +100,71 @@ func handleOut(c net.Conn, o chan []byte) {
 	}
 }
 
-func readFile(o chan []byte) {
-	buf, _ := ioutil.ReadFile("data/in.mp4")
+func receiveData(c ec.Connection) {
+	for i := 0; i < 10; i++ {
+		writeFile(<-c.I)
+	}
+}
+
+func writeFile(c chan []byte) {
+	in, _ := ioutil.ReadFile(inFile)
+	buf := make([]byte, 0)
+	data := <-c
+	buf = append(buf, data...)
+	for {
+		data := <-c
+		if data == nil {
+			buf = unescape(buf)
+			ioutil.WriteFile(outFile, buf, 0644)
+			if bytes.Compare(buf, in) == 0 {
+				fmt.Print("complete")
+			} else {
+				fmt.Print("failed")
+			}
+			return
+		}
+		buf = append(buf, data...)
+	}
+}
+
+func unescape(a []byte) []byte {
+	var escapeByte byte = 7
+	r := make([]byte, 0, len(a))
+	for i := 0; i < len(a); i++ {
+		switch a[i] {
+		case escapeByte:
+			i++
+			switch a[i] {
+			case 8:
+				r = append(r, ec.PkgStart)
+			case 9:
+				r = append(r, ec.PkgEnd)
+			case 10:
+				r = append(r, ec.ControlPkgStart)
+			case 11:
+				r = append(r, ec.ControlPkgEnd)
+			case 12:
+				r = append(r, ec.Ignore)
+			case escapeByte:
+				r = append(r, escapeByte)
+			}
+		default:
+			r = append(r, a[i])
+		}
+	}
+	return r
+}
+
+func sendData(c ec.Connection) {
+	for i := 0; i < 10; i++ {
+		fsc := make(chan []byte)
+		c.O <- fsc
+		readFile(fsc)
+	}
+}
+
+func readFile(c chan []byte) {
+	buf, _ := ioutil.ReadFile(inFile)
 	buf = escape(buf)
 	for len(buf) > 0 {
 		l := rand.Intn(100000) + 1
@@ -120,38 +173,16 @@ func readFile(o chan []byte) {
 		}
 		pkg := make([]byte, l)
 		copy(pkg, buf[:l])
-		o <- pkg
+		c <- pkg
 		buf = buf[l:]
 	}
-	o <- nil
+	c <- nil
 }
 
-func writeFile(c chan []byte) {
-	in, _ := ioutil.ReadFile("data/in.mp4")
-	buf := make([]byte, 0)
-	data := <-c
-	buf = append(buf, data...)
-	for {
-		data := <-c
-		if data == nil {
-			buf = unescape(buf)
-			ioutil.WriteFile("data/out.mp4", buf, 0644)
-			if bytes.Compare(buf, in) == 0 {
-
-				println("Done!!!")
-			} else {
-				println(":(")
-			}
-			return
-		}
-		buf = append(buf, data...)
-	}
-}
-
-func escape(pkg []byte) []byte {
+func escape(a []byte) []byte {
 	var escapeByte byte = 7
-	r := make([]byte, 0, len(pkg))
-	for _, e := range pkg {
+	r := make([]byte, 0, len(a))
+	for _, e := range a {
 		switch e {
 		case ec.PkgStart:
 			r = append(r, escapeByte)
@@ -173,34 +204,6 @@ func escape(pkg []byte) []byte {
 			r = append(r, escapeByte)
 		default:
 			r = append(r, e)
-		}
-	}
-	return r
-}
-
-func unescape(e []byte) []byte {
-	var escapeByte byte = 7
-	r := make([]byte, 0, len(e))
-	for i := 0; i < len(e); i++ {
-		switch e[i] {
-		case escapeByte:
-			i++
-			switch e[i] {
-			case 8:
-				r = append(r, ec.PkgStart)
-			case 9:
-				r = append(r, ec.PkgEnd)
-			case 10:
-				r = append(r, ec.ControlPkgStart)
-			case 11:
-				r = append(r, ec.ControlPkgEnd)
-			case 12:
-				r = append(r, ec.Ignore)
-			case escapeByte:
-				r = append(r, escapeByte)
-			}
-		default:
-			r = append(r, e[i])
 		}
 	}
 	return r
