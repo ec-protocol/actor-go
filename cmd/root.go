@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+var encrypt bool
 var connect string
 var listen string
 var in string
@@ -23,6 +24,8 @@ var rootCmd = &cobra.Command{
 	Long: `run actor-go
 actor-go is a implementation of the ec protocol written in go`,
 	Run: func(cmd *cobra.Command, args []string) {
+		encrypt, _ = cmd.Flags().GetBool("unsafe")
+		encrypt = !encrypt
 		connect, _ = cmd.Flags().GetString("connect")
 		listen, _ = cmd.Flags().GetString("listen")
 		in, _ = cmd.Flags().GetString("in")
@@ -39,6 +42,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.Flags().BoolP("unsafe", "u", false, "disables encryption")
 	rootCmd.Flags().StringP("connect", "c", "", "address to connect to")
 	rootCmd.Flags().StringP("listen", "l", "", "address to listen on")
 	rootCmd.Flags().StringP("in", "i", "", "input file path")
@@ -70,7 +74,7 @@ func createConnection(c net.Conn) ec.Connection {
 	connection := ec.NewConnection(i, o)
 	go handleIn(c, i)
 	go handleOut(c, o)
-	connection.Init()
+	connection.Init(encrypt)
 	return connection
 }
 
