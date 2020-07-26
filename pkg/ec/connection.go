@@ -16,11 +16,16 @@ const (
 	Ignore
 )
 
+const cryptBlockSize = 1024
+const decryptBlockSize = cryptBlockSize + 28
+
 type Connection struct {
 	i        chan []byte
 	o        chan []byte
-	cancel   chan bool
-	reset    chan bool
+	resetI   chan bool
+	resetO   chan bool
+	cancelI  chan bool
+	cancelO  chan bool
 	ikey     []byte
 	okey     []byte
 	controlI chan chan []byte
@@ -32,7 +37,10 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 	return Connection{
 		i:        i,
 		o:        o,
-		cancel:   make(chan bool),
+		resetI:   make(chan bool),
+		resetO:   make(chan bool),
+		cancelI:  make(chan bool),
+		cancelO:  make(chan bool),
 		controlI: make(chan chan []byte),
 		I:        make(chan chan []byte),
 		O:        make(chan chan []byte),
@@ -40,6 +48,9 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 }
 
 func (c *Connection) Init() {
+
+	initDone := make(chan bool)
+
 	privateKey, _ := genRSAKey(2048)
 	encodedPublicKey := x509.MarshalPKCS1PublicKey(&privateKey.PublicKey)
 	encodedPublicKey = escape(encodedPublicKey)
@@ -83,11 +94,15 @@ func (c *Connection) Init() {
 		encryptedOutKey := unescape(pkg)
 		c.okey, _ = rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedOutKey, nil)
 
-		c.reset <- true
+		c.resetI <- true
+		c.resetO <- true
+		initDone <- true
 	}()
 
 	go c.handleIn()
 	go c.handleOut()
+
+	<-initDone
 }
 
 func (c *Connection) handleIn() {
@@ -98,16 +113,31 @@ func (c *Connection) handleIn() {
 	pos := 0
 	var cc chan []byte = nil
 	var ccpc chan []byte = nil
+	leftover := make([]byte, 0)
 	for {
 		select {
-		case <-c.reset:
+		case <-c.resetI:
 			go c.handleIn()
 			return
-		case <-c.cancel:
+		case <-c.cancelI:
 			return
 		case e := <-c.i:
+			e = append(leftover, e...)
+			leftover = leftover[:0]
 			if crypt {
-				e, _ = decryptSync(e, c.ikey)
+				//todo ensure to encrypt blocks of a fixed size
+				dsec := make([]byte, 0, len(e))
+				for i := 0; i < len(e); i += decryptBlockSize {
+					//todo ensure to encrypt blocks of a fixed size
+					if len(e) >= i+decryptBlockSize {
+						buf, _ := decryptSync(e[i:i+decryptBlockSize], c.ikey)
+						dsec = append(dsec, buf...)
+					} else {
+						leftover = append(leftover, e[i:]...)
+						break
+					}
+				}
+				e = dsec
 			}
 			sec := make([]byte, 0, len(e))
 			csec := make([]byte, 0)
@@ -170,32 +200,51 @@ func (c *Connection) handleOut() {
 	for {
 		var cc chan []byte = nil
 		select {
-		case <-c.reset:
+		case <-c.resetO:
 			go c.handleOut()
 			return
-		case <-c.cancel:
+		case <-c.cancelO:
 			return
 		case cc = <-c.O:
 		}
 		b := true
 		for cc != nil {
 			select {
-			case <-c.cancel:
+			case <-c.resetO:
+				go c.handleOut()
+				return
+			case <-c.cancelO:
 				return
 			case sec := <-cc:
-				if sec == nil {
-					c.o <- []byte{PkgEnd}
-					cc = nil
-					break
-				}
 				checkControlCharacters(sec)
+				if sec == nil {
+					sec = []byte{PkgEnd}
+					cc = nil
+				}
 				if b {
-					c.o <- append([]byte{PkgStart}, sec...)
+					sec = append([]byte{PkgStart}, sec...)
 					b = false
-					break
 				}
 				if crypt {
-					sec, _ = encryptSync(sec, c.okey)
+					esec := make([]byte, 0, len(sec))
+					cryptBuf := make([]byte, 0, cryptBlockSize)
+					for i := 0; i < len(sec); i += cryptBlockSize {
+						//todo ensure to encrypt blocks of a fixed size
+						if len(sec) >= i+cryptBlockSize {
+							cryptBuf = append(cryptBuf, sec[i:i+cryptBlockSize]...)
+						} else {
+							cryptBuf = append(cryptBuf, sec[i:]...)
+							ignore := make([]byte, cryptBlockSize-len(cryptBuf))
+							for i := range ignore {
+								ignore[i] = Ignore
+							}
+							cryptBuf = append(cryptBuf, ignore...)
+						}
+						block, _ := encryptSync(cryptBuf, c.okey)
+						esec = append(esec, block...)
+						cryptBuf = cryptBuf[:0]
+					}
+					sec = esec
 				}
 				c.o <- sec
 			}

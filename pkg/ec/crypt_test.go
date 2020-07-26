@@ -4,7 +4,7 @@ import "testing"
 
 func TestBasicSyncEncryption(t *testing.T) {
 	k := genSyncKey(32)
-	m := []byte("Wasp Hitler")
+	m := []byte("Wasp Hitler!!!!!Wasp Hitler!!!!!Wasp Hitler!!!!!Wasp Hitler!!!!!Wasp Hitler!!!!!")
 	e, _ := encryptSync(m, k)
 	dm, _ := decryptSync(e, k)
 	if string(m) != string(dm) {
