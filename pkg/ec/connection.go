@@ -47,7 +47,13 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 	}
 }
 
-func (c *Connection) Init() {
+func (c *Connection) Init(encrypt bool) {
+
+	if !encrypt {
+		go c.handleIn()
+		go c.handleOut()
+		return
+	}
 
 	initDone := make(chan bool)
 
