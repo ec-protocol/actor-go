@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/ec-protocol/actor-go/cmd"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/ec-protocol/actor-go/cmd"
 )
 
 func main() {

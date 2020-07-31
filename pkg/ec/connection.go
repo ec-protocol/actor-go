@@ -29,8 +29,8 @@ type Connection struct {
 	ikey     []byte
 	okey     []byte
 	controlI chan chan []byte
-	I        chan chan []byte
-	O        chan chan []byte
+	In       chan chan []byte
+	Out      chan chan []byte
 }
 
 func NewConnection(i chan []byte, o chan []byte) Connection {
@@ -42,8 +42,8 @@ func NewConnection(i chan []byte, o chan []byte) Connection {
 		cancelI:  make(chan bool),
 		cancelO:  make(chan bool),
 		controlI: make(chan chan []byte),
-		I:        make(chan chan []byte),
-		O:        make(chan chan []byte),
+		In:       make(chan chan []byte),
+		Out:      make(chan chan []byte),
 	}
 }
 
@@ -131,10 +131,8 @@ func (c *Connection) handleIn() {
 			e = append(leftover, e...)
 			leftover = leftover[:0]
 			if crypt {
-				//todo ensure to encrypt blocks of a fixed size
 				dsec := make([]byte, 0, len(e))
 				for i := 0; i < len(e); i += decryptBlockSize {
-					//todo ensure to encrypt blocks of a fixed size
 					if len(e) >= i+decryptBlockSize {
 						buf, _ := decryptSync(e[i:i+decryptBlockSize], c.ikey)
 						dsec = append(dsec, buf...)
@@ -155,7 +153,7 @@ func (c *Connection) handleIn() {
 					}
 					pos = 1
 					cc = make(chan []byte)
-					c.I <- cc
+					c.In <- cc
 				case PkgEnd:
 					if pos != 1 {
 						panic(errors.New("illegal state"))
@@ -211,7 +209,7 @@ func (c *Connection) handleOut() {
 			return
 		case <-c.cancelO:
 			return
-		case cc = <-c.O:
+		case cc = <-c.Out:
 		}
 		b := true
 		for cc != nil {
@@ -269,10 +267,8 @@ func receiveSec(sec []byte, cc chan []byte) {
 
 func checkControlCharacters(e []byte) {
 	for _, i := range e {
-		switch i {
-		case PkgStart, PkgEnd, ControlPkgStart, ControlPkgEnd, Ignore:
-			panic(errors.New("bytes values from 1 until 5 used as control characters and therefor can not be send or must be encode or escape"))
-		default:
+		if i == PkgStart || i == PkgEnd || i == ControlPkgStart || i == ControlPkgEnd || i == Ignore {
+			panic(errors.New("byte values from 1 until 5 are used as control characters and can therefore not be sent or must be encoded or escaped"))
 		}
 	}
 }
