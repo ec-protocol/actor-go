@@ -233,7 +233,6 @@ func (c *Connection) handleOut() {
 					esec := make([]byte, 0, len(sec))
 					cryptBuf := make([]byte, 0, cryptBlockSize)
 					for i := 0; i < len(sec); i += cryptBlockSize {
-						//todo ensure to encrypt blocks of a fixed size
 						if len(sec) >= i+cryptBlockSize {
 							cryptBuf = append(cryptBuf, sec[i:i+cryptBlockSize]...)
 						} else {
