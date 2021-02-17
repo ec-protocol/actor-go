@@ -23,9 +23,8 @@ var out string
 var rootCmd = &cobra.Command{
 	Use:   "actor-go",
 	Short: "run actor-go",
-	Long: `run actor-go
-actor-go is a implementation of the ec protocol written in go`,
-	Run: run,
+	Long:  `run actor-go actor-go is a implementation of the ec protocol written in go`,
+	Run:   run,
 }
 
 func Execute() {
